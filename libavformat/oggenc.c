@@ -24,7 +24,6 @@
 #include "libavutil/crc.h"
 #include "libavutil/mathematics.h"
 #include "libavutil/opt.h"
-#include "libavutil/random_seed.h"
 #include "libavcodec/xiph.h"
 #include "libavcodec/bytestream.h"
 #include "libavcodec/flac.h"
@@ -71,6 +70,7 @@ typedef struct {
     OGGPageList *page_list;
     int pref_size; ///< preferred page size (0 => fill all segments)
     int64_t pref_duration;      ///< preferred page duration (0 => fill all segments)
+    unsigned int next_serial_num;
 } OGGContext;
 
 #define OFFSET(x) offsetof(OGGContext, x)
@@ -418,7 +418,6 @@ static int ogg_write_header(AVFormatContext *s)
 
     for (i = 0; i < s->nb_streams; i++) {
         AVStream *st = s->streams[i];
-        unsigned serial_num = i;
 
         if (st->codec->codec_type == AVMEDIA_TYPE_AUDIO)
             if (st->codec->codec_id == AV_CODEC_ID_OPUS)
@@ -442,17 +441,7 @@ static int ogg_write_header(AVFormatContext *s)
         }
         oggstream = av_mallocz(sizeof(*oggstream));
         oggstream->page.stream_index = i;
-
-        if (!(s->flags & AVFMT_FLAG_BITEXACT))
-            do {
-                serial_num = av_get_random_seed();
-                for (j = 0; j < i; j++) {
-                    OGGStreamContext *sc = s->streams[j]->priv_data;
-                    if (serial_num == sc->serial_num)
-                        break;
-                }
-            } while (j < i);
-        oggstream->serial_num = serial_num;
+        oggstream->serial_num = ogg->next_serial_num++;
 
         st->priv_data = oggstream;
         if (st->codec->codec_id == AV_CODEC_ID_FLAC) {
