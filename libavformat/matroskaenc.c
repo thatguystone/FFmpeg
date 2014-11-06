@@ -1173,14 +1173,14 @@ static int mkv_write_header(AVFormatContext *s)
         if (ret < 0)
             return ret;
 
-        ret = mkv_write_tags(s);
-        if (ret < 0)
-            return ret;
-
         ret = mkv_write_attachments(s);
         if (ret < 0)
             return ret;
     }
+
+    ret = mkv_write_tags(s, 0);
+    if (ret < 0)
+        return ret;
 
     if (!s->pb->seekable)
         mkv_write_seekhead(pb, mkv->main_seekhead);
