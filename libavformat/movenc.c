@@ -2604,7 +2604,8 @@ static int mov_write_traf_tag(AVIOContext *pb, MOVMuxContext *mov,
 }
 
 static int mov_write_moof_tag_internal(AVIOContext *pb, MOVMuxContext *mov,
-                                       int tracks, int moof_size)
+                                       AVFormatContext *s, int tracks,
+                                       int moof_size, int metadata_updated)
 {
     int64_t pos = avio_tell(pb);
     int i;
@@ -2623,19 +2624,26 @@ static int mov_write_moof_tag_internal(AVIOContext *pb, MOVMuxContext *mov,
         mov_write_traf_tag(pb, mov, track, pos, moof_size);
     }
 
+    if (metadata_updated && mov->mode != MODE_PSP) {
+        mov_write_udta_tag(pb, mov, s);
+    }
+
     return update_size(pb, pos);
 }
 
-static int mov_write_moof_tag(AVIOContext *pb, MOVMuxContext *mov, int tracks)
+static int mov_write_moof_tag(AVFormatContext *s, MOVMuxContext *mov, int tracks)
 {
     AVIOContext *avio_buf;
     int ret, moof_size;
+    int metadata_updated = s->event_flags & AVSTREAM_EVENT_FLAG_METADATA_UPDATED;
+
+    s->event_flags &= ~AVSTREAM_EVENT_FLAG_METADATA_UPDATED;
 
     if ((ret = ffio_open_null_buf(&avio_buf)) < 0)
         return ret;
-    mov_write_moof_tag_internal(avio_buf, mov, tracks, 0);
+    mov_write_moof_tag_internal(avio_buf, mov, s, tracks, 0, metadata_updated);
     moof_size = ffio_close_null_buf(avio_buf);
-    return mov_write_moof_tag_internal(pb, mov, tracks, moof_size);
+    return mov_write_moof_tag_internal(s->pb, mov, s, tracks, moof_size, metadata_updated);
 }
 
 static int mov_write_tfra_tag(AVIOContext *pb, MOVTrack *track)
@@ -3016,7 +3024,7 @@ static int mov_flush_fragment(AVFormatContext *s)
             info->duration = duration;
             mov_write_tfrf_tags(s->pb, mov, track);
 
-            mov_write_moof_tag(s->pb, mov, moof_tracks);
+            mov_write_moof_tag(s, mov, moof_tracks);
             info->tfrf_offset = track->tfrf_offset;
             mov->fragments++;
 
