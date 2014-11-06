@@ -530,7 +530,7 @@ static EbmlSyntax matroska_clusters[] = {
     { MATROSKA_ID_CLUSTER,  EBML_NEST, 0, 0, { .n = matroska_cluster } },
     { MATROSKA_ID_INFO,     EBML_NONE },
     { MATROSKA_ID_CUES,     EBML_NONE },
-    { MATROSKA_ID_TAGS,     EBML_NONE },
+    { MATROSKA_ID_TAGS,     EBML_NEST, 0, 0, { .n = matroska_tags } },
     { MATROSKA_ID_SEEKHEAD, EBML_NONE },
     { 0 }
 };
@@ -543,7 +543,7 @@ static EbmlSyntax matroska_cluster_incremental_parsing[] = {
     { MATROSKA_ID_CLUSTERPREVSIZE, EBML_NONE },
     { MATROSKA_ID_INFO,            EBML_NONE },
     { MATROSKA_ID_CUES,            EBML_NONE },
-    { MATROSKA_ID_TAGS,            EBML_NONE },
+    { MATROSKA_ID_TAGS,            EBML_NEST, 0, 0, { .n = matroska_tags } },
     { MATROSKA_ID_SEEKHEAD,        EBML_NONE },
     { MATROSKA_ID_CLUSTER,         EBML_STOP },
     { 0 }
@@ -562,7 +562,7 @@ static EbmlSyntax matroska_clusters_incremental[] = {
     { MATROSKA_ID_CLUSTER,  EBML_NEST, 0, 0, { .n = matroska_cluster_incremental } },
     { MATROSKA_ID_INFO,     EBML_NONE },
     { MATROSKA_ID_CUES,     EBML_NONE },
-    { MATROSKA_ID_TAGS,     EBML_NONE },
+    { MATROSKA_ID_TAGS,     EBML_NEST, 0, 0, { .n = matroska_tags } },
     { MATROSKA_ID_SEEKHEAD, EBML_NONE },
     { 0 }
 };
@@ -899,6 +899,12 @@ static int ebml_parse_elem(MatroskaDemuxContext *matroska,
     int res;
 
     data = (char *) data + syntax->data_offset;
+
+    // Metadata is always applied to the context
+    if (syntax == matroska_tags) {
+        data = &matroska->tags;
+    }
+
     if (syntax->list_elem_size) {
         EbmlList *list = data;
         if ((res = av_reallocp_array(&list->elem,
@@ -978,7 +984,8 @@ static void ebml_free(EbmlSyntax *syntax, void *data)
                 for (j = 0; j < list->nb_elem;
                      j++, ptr += syntax[i].list_elem_size)
                     ebml_free(syntax[i].def.n, ptr);
-                av_free(list->elem);
+                list->nb_elem = 0;
+                av_freep(&list->elem);
             } else
                 ebml_free(syntax[i].def.n, data_off);
         default:
@@ -1291,14 +1298,20 @@ static void matroska_convert_tags(AVFormatContext *s)
         } else if (tags[i].target.trackuid) {
             MatroskaTrack *track = matroska->tracks.elem;
             for (j = 0; j < matroska->tracks.nb_elem; j++)
-                if (track[j].uid == tags[i].target.trackuid && track[j].stream)
+                if (track[j].uid == tags[i].target.trackuid && track[j].stream) {
+                    AVStream *st = track[j].stream;
                     matroska_convert_tag(s, &tags[i].tag,
-                                         &track[j].stream->metadata, NULL);
+                                         &st->metadata, NULL);
+                    st->event_flags |= AVSTREAM_EVENT_FLAG_METADATA_UPDATED;
+                }
         } else {
             matroska_convert_tag(s, &tags[i].tag, &s->metadata,
                                  tags[i].target.type);
+            s->event_flags |= AVFMT_EVENT_FLAG_METADATA_UPDATED;
         }
     }
+
+    ebml_free(matroska_tags, matroska);
 }
 
 static int matroska_parse_seekhead_entry(MatroskaDemuxContext *matroska,
@@ -2533,6 +2546,8 @@ static int matroska_read_packet(AVFormatContext *s, AVPacket *pkt)
         pkt->flags |= AV_PKT_FLAG_CORRUPT;
         return 0;
     }
+
+    matroska_convert_tags(s);
 
     return ret;
 }
