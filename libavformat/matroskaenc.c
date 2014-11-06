@@ -967,7 +967,7 @@ static void mkv_write_simpletag(AVIOContext *pb, AVDictionaryEntry *t)
 }
 
 static int mkv_write_tag(AVFormatContext *s, AVDictionary *m, unsigned int elementid,
-                         unsigned int uid, ebml_master *tags)
+                         unsigned int uid, ebml_master *tags, int is_update)
 {
     MatroskaMuxContext *mkv = s->priv_data;
     ebml_master tag, targets;
@@ -975,8 +975,10 @@ static int mkv_write_tag(AVFormatContext *s, AVDictionary *m, unsigned int eleme
     int ret;
 
     if (!tags->pos) {
-        ret = mkv_add_seekhead_entry(mkv->main_seekhead, MATROSKA_ID_TAGS, avio_tell(s->pb));
-        if (ret < 0) return ret;
+        if (s->pb->seekable) {
+            ret = mkv_add_seekhead_entry(mkv->main_seekhead, MATROSKA_ID_TAGS, avio_tell(s->pb));
+            if (ret < 0) return ret;
+        }
 
         *tags = start_ebml_master(s->pb, MATROSKA_ID_TAGS, 0);
     }
@@ -988,7 +990,11 @@ static int mkv_write_tag(AVFormatContext *s, AVDictionary *m, unsigned int eleme
     end_ebml_master(s->pb, targets);
 
     while ((t = av_dict_get(m, "", t, AV_DICT_IGNORE_SUFFIX)))
-        if (av_strcasecmp(t->key, "title") &&
+        // When inserting metadata between clusters, there is no title element
+        // elsewhere to attach to, so the title must be included with other
+        // metadata.
+        if (is_update ||
+            av_strcasecmp(t->key, "title") &&
             av_strcasecmp(t->key, "encoding_tool"))
             mkv_write_simpletag(s->pb, t);
 
@@ -996,7 +1002,7 @@ static int mkv_write_tag(AVFormatContext *s, AVDictionary *m, unsigned int eleme
     return 0;
 }
 
-static int mkv_write_tags(AVFormatContext *s)
+static int mkv_write_tags(AVFormatContext *s, int is_update)
 {
     ebml_master tags = {0};
     int i, ret;
@@ -1004,7 +1010,7 @@ static int mkv_write_tags(AVFormatContext *s)
     ff_metadata_conv_ctx(s, ff_mkv_metadata_conv, NULL);
 
     if (av_dict_get(s->metadata, "", NULL, AV_DICT_IGNORE_SUFFIX)) {
-        ret = mkv_write_tag(s, s->metadata, 0, 0, &tags);
+        ret = mkv_write_tag(s, s->metadata, 0, 0, &tags, is_update);
         if (ret < 0) return ret;
     }
 
@@ -1014,7 +1020,7 @@ static int mkv_write_tags(AVFormatContext *s)
         if (!av_dict_get(st->metadata, "", 0, AV_DICT_IGNORE_SUFFIX))
             continue;
 
-        ret = mkv_write_tag(s, st->metadata, MATROSKA_ID_TAGTARGETS_TRACKUID, i + 1, &tags);
+        ret = mkv_write_tag(s, st->metadata, MATROSKA_ID_TAGTARGETS_TRACKUID, i + 1, &tags, is_update);
         if (ret < 0) return ret;
     }
 
@@ -1024,7 +1030,7 @@ static int mkv_write_tags(AVFormatContext *s)
         if (!av_dict_get(ch->metadata, "", NULL, AV_DICT_IGNORE_SUFFIX))
             continue;
 
-        ret = mkv_write_tag(s, ch->metadata, MATROSKA_ID_TAGTARGETS_CHAPTERUID, ch->id, &tags);
+        ret = mkv_write_tag(s, ch->metadata, MATROSKA_ID_TAGTARGETS_CHAPTERUID, ch->id, &tags, is_update);
         if (ret < 0) return ret;
     }
 
@@ -1470,6 +1476,11 @@ static int mkv_write_packet_internal(AVFormatContext *s, AVPacket *pkt)
     }
 
     if (!mkv->cluster_pos) {
+        if (s->event_flags & AVFMT_EVENT_FLAG_METADATA_UPDATED) {
+            mkv_write_tags(s, 1);
+            s->event_flags &= ~AVFMT_EVENT_FLAG_METADATA_UPDATED;
+        }
+
         mkv->cluster_pos = avio_tell(s->pb);
         mkv->cluster     = start_ebml_master(pb, MATROSKA_ID_CLUSTER, 0);
         put_ebml_uint(pb, MATROSKA_ID_CLUSTERTIMECODE, FFMAX(0, ts));
