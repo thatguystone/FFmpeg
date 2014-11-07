@@ -407,43 +407,19 @@ static void ogg_write_pages(AVFormatContext *s, int flush)
     ogg->page_list = p;
 }
 
-static int ogg_write_header(AVFormatContext *s)
+static int ogg_write_stream_headers(AVFormatContext *s)
 {
+    int i, j;
     OGGContext *ogg = s->priv_data;
     OGGStreamContext *oggstream;
-    int i, j;
-
-    if (ogg->pref_size)
-        av_log(s, AV_LOG_WARNING, "The pagesize option is deprecated\n");
 
     for (i = 0; i < s->nb_streams; i++) {
         AVStream *st = s->streams[i];
+        oggstream = st->priv_data;
 
-        if (st->codec->codec_type == AVMEDIA_TYPE_AUDIO)
-            if (st->codec->codec_id == AV_CODEC_ID_OPUS)
-                /* Opus requires a fixed 48kHz clock */
-                avpriv_set_pts_info(st, 64, 1, 48000);
-            else
-                avpriv_set_pts_info(st, 64, 1, st->codec->sample_rate);
+        oggstream->serial_num = ++ogg->next_serial_num;
+        oggstream->page_counter = 0;
 
-        if (st->codec->codec_id != AV_CODEC_ID_VORBIS &&
-            st->codec->codec_id != AV_CODEC_ID_THEORA &&
-            st->codec->codec_id != AV_CODEC_ID_SPEEX  &&
-            st->codec->codec_id != AV_CODEC_ID_FLAC   &&
-            st->codec->codec_id != AV_CODEC_ID_OPUS) {
-            av_log(s, AV_LOG_ERROR, "Unsupported codec id in stream %d\n", i);
-            return -1;
-        }
-
-        if (!st->codec->extradata || !st->codec->extradata_size) {
-            av_log(s, AV_LOG_ERROR, "No extradata present\n");
-            return -1;
-        }
-        oggstream = av_mallocz(sizeof(*oggstream));
-        oggstream->page.stream_index = i;
-        oggstream->serial_num = ogg->next_serial_num++;
-
-        st->priv_data = oggstream;
         if (st->codec->codec_id == AV_CODEC_ID_FLAC) {
             int err = ogg_build_flac_headers(st->codec, oggstream,
                                              s->flags & AVFMT_FLAG_BITEXACT,
@@ -522,13 +498,53 @@ static int ogg_write_header(AVFormatContext *s)
                                 oggstream->header_len[i], 0, 1);
         }
         ogg_buffer_page(s, oggstream);
+        oggstream->page.start_granule = AV_NOPTS_VALUE;
     }
-
-    oggstream->page.start_granule = AV_NOPTS_VALUE;
 
     ogg_write_pages(s, 2);
 
     return 0;
+}
+
+static int ogg_write_header(AVFormatContext *s)
+{
+    OGGContext *ogg = s->priv_data;
+    OGGStreamContext *oggstream;
+    int i;
+
+    if (ogg->pref_size)
+        av_log(s, AV_LOG_WARNING, "The pagesize option is deprecated\n");
+
+    for (i = 0; i < s->nb_streams; i++) {
+        AVStream *st = s->streams[i];
+
+        if (st->codec->codec_type == AVMEDIA_TYPE_AUDIO)
+            if (st->codec->codec_id == AV_CODEC_ID_OPUS)
+                /* Opus requires a fixed 48kHz clock */
+                avpriv_set_pts_info(st, 64, 1, 48000);
+            else
+                avpriv_set_pts_info(st, 64, 1, st->codec->sample_rate);
+
+        if (st->codec->codec_id != AV_CODEC_ID_VORBIS &&
+            st->codec->codec_id != AV_CODEC_ID_THEORA &&
+            st->codec->codec_id != AV_CODEC_ID_SPEEX  &&
+            st->codec->codec_id != AV_CODEC_ID_FLAC   &&
+            st->codec->codec_id != AV_CODEC_ID_OPUS) {
+            av_log(s, AV_LOG_ERROR, "Unsupported codec id in stream %d\n", i);
+            return -1;
+        }
+
+        if (!st->codec->extradata || !st->codec->extradata_size) {
+            av_log(s, AV_LOG_ERROR, "No extradata present\n");
+            return -1;
+        }
+
+        oggstream = av_mallocz(sizeof(*oggstream));
+        oggstream->page.stream_index = i;
+        st->priv_data = oggstream;
+    }
+
+    return ogg_write_stream_headers(s);
 }
 
 static int ogg_write_packet_internal(AVFormatContext *s, AVPacket *pkt)
