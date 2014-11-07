@@ -58,6 +58,7 @@ typedef struct {
     OGGPage page; ///< current page
     unsigned serial_num; ///< serial number
     int64_t last_granule; ///< last packet granule
+    int64_t first_granule; ///< first granule in current bitstream
 } OGGStreamContext;
 
 typedef struct OGGPageList {
@@ -105,9 +106,12 @@ static int ogg_write_page(AVFormatContext *s, OGGPage *page, int extra_flags)
 {
     OGGStreamContext *oggstream = s->streams[page->stream_index]->priv_data;
     AVIOContext *pb;
-    int64_t crc_offset;
+    int64_t crc_offset, granule = page->granule;
     int ret, size;
     uint8_t *buf;
+
+    if (oggstream->first_granule != AV_NOPTS_VALUE)
+        granule -= oggstream->first_granule;
 
     ret = avio_open_dyn_buf(&pb);
     if (ret < 0)
@@ -116,7 +120,7 @@ static int ogg_write_page(AVFormatContext *s, OGGPage *page, int extra_flags)
     ffio_wfourcc(pb, "OggS");
     avio_w8(pb, 0);
     avio_w8(pb, page->flags | extra_flags);
-    avio_wl64(pb, page->granule);
+    avio_wl64(pb, granule);
     avio_wl32(pb, oggstream->serial_num);
     avio_wl32(pb, oggstream->page_counter++);
     crc_offset = avio_tell(pb);
@@ -418,6 +422,7 @@ static int ogg_write_stream_headers(AVFormatContext *s)
         oggstream = st->priv_data;
 
         oggstream->serial_num = ++ogg->next_serial_num;
+        oggstream->first_granule = AV_NOPTS_VALUE;
         oggstream->page_counter = 0;
 
         if (st->codec->codec_id == AV_CODEC_ID_FLAC) {
@@ -576,6 +581,9 @@ static int ogg_write_packet_internal(AVFormatContext *s, AVPacket *pkt)
 
     if (oggstream->page.start_granule == AV_NOPTS_VALUE)
         oggstream->page.start_granule = pkt->pts;
+
+    if (oggstream->first_granule == AV_NOPTS_VALUE)
+        oggstream->first_granule = pkt->pts;
 
     ret = ogg_buffer_data(s, st, pkt->data, pkt->size, granule, 0);
     if (ret < 0)
