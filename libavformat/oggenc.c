@@ -552,6 +552,20 @@ static int ogg_write_header(AVFormatContext *s)
     return ogg_write_stream_headers(s);
 }
 
+static void ogg_flush_current_page(AVFormatContext *s, int eof)
+{
+    int i;
+
+    for (i = 0; i < s->nb_streams; i++) {
+        OGGStreamContext *oggstream = s->streams[i]->priv_data;
+
+        if (!eof || oggstream->page.size > 0)
+            ogg_buffer_page(s, oggstream);
+    }
+
+    ogg_write_pages(s, 1);
+}
+
 static int ogg_write_packet_internal(AVFormatContext *s, AVPacket *pkt)
 {
     AVStream *st = s->streams[pkt->stream_index];
@@ -593,6 +607,14 @@ static int ogg_write_packet_internal(AVFormatContext *s, AVPacket *pkt)
 
     oggstream->last_granule = granule;
 
+    if (s->event_flags & AVSTREAM_EVENT_FLAG_METADATA_UPDATED) {
+        ogg_flush_current_page(s, 0);
+        ret = ogg_write_stream_headers(s);
+        if (ret)
+            return ret;
+        s->event_flags &= ~AVSTREAM_EVENT_FLAG_METADATA_UPDATED;
+    }
+
     return 0;
 }
 
@@ -617,15 +639,7 @@ static int ogg_write_trailer(AVFormatContext *s)
 {
     int i;
 
-    /* flush current page if needed */
-    for (i = 0; i < s->nb_streams; i++) {
-        OGGStreamContext *oggstream = s->streams[i]->priv_data;
-
-        if (oggstream->page.size > 0)
-            ogg_buffer_page(s, oggstream);
-    }
-
-    ogg_write_pages(s, 1);
+    ogg_flush_current_page(s, 1);
 
     for (i = 0; i < s->nb_streams; i++) {
         AVStream *st = s->streams[i];
